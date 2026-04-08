@@ -6,13 +6,36 @@
   <title>JSON Forge</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <link rel="favicon" href="./favicon.ico">
   <style>
     html, body { height: 100%; overflow: hidden; }
-    textarea { resize: none; font-family: monospace; font-size: 13px; }
+    textarea { resize: none; font-family: monospace; font-size: 13px; line-height: 1.5; }
     .panel-height { height: calc(100vh - 116px); }
+
+    /* Line-number gutter for input textarea */
+    .editor-wrap { display: flex; flex: 1 1 auto; overflow: hidden; }
+    .line-nums {
+      font-family: monospace; font-size: 13px; line-height: 1.5;
+      min-width: 40px; text-align: right;
+      padding: 8px 6px 8px 4px;
+      color: #6c757d; background: inherit;
+      border-right: 1px solid #495057;
+      user-select: none; overflow: hidden;
+      white-space: pre;
+    }
+    .editor-wrap textarea { flex: 1 1 auto; padding: 8px; border: none !important; outline: none !important; }
     .tree-scroll  { overflow-y: auto; height: 100%; }
 
-    .tree-ul { list-style: none; padding-left: 20px; margin: 0; }
+    .theme-dark      { background:#0d1117 !important; color:#e6edf3 !important; }
+    .theme-dark.line-nums { background:#161b22 !important; color:#484f58 !important; border-color:#30363d !important; }
+    .theme-light     { background:#ffffff !important; color:#24292f !important; }
+    .theme-light.line-nums { background:#f6f8fa !important; color:#8c959f !important; border-color:#d0d7de !important; }
+    .theme-monokai   { background:#272822 !important; color:#f8f8f2 !important; }
+    .theme-monokai.line-nums { background:#1e1f1b !important; color:#75715e !important; border-color:#3d3d3d !important; }
+    .theme-nord      { background:#2e3440 !important; color:#d8dee9 !important; }
+    .theme-nord.line-nums { background:#272c36 !important; color:#616e88 !important; border-color:#3b4252 !important; }
+    .theme-solarized { background:#002b36 !important; color:#839496 !important; }
+    .theme-solarized.line-nums { background:#01212b !important; color:#5a7b86 !important; border-color:#073642 !important; }
     .tree-ul.root { padding-left: 0; }
     .tree-toggle { cursor: pointer; user-select: none; }
     .tree-toggle .caret { display: inline-block; width: 14px; color: #6c757d; font-size: 10px; transition: transform .15s; }
@@ -105,13 +128,17 @@
           <div class="card-header border-secondary py-2 px-3">
             <span class="text-warning fw-semibold small"><i class="bi bi-pencil-square me-1"></i>Input JSON</span>
           </div>
-          <textarea
-            id="inputEditor"
-            class="form-control border-0 rounded-0 rounded-bottom flex-grow-1"
-            placeholder="Paste or type JSON here..."
-            oninput="onInput()"
-            spellcheck="false"
-          ></textarea>
+          <div class="editor-wrap">
+            <div class="line-nums rounded-bottom-start" id="lineNums">1</div>
+            <textarea
+              id="inputEditor"
+              class="form-control border-0 rounded-0 rounded-bottom-end"
+              placeholder="Paste or type JSON here..."
+              oninput="onInput()"
+              onscroll="syncLineScroll()"
+              spellcheck="false"
+            ></textarea>
+          </div>
         </div>
       </div>
 
@@ -205,6 +232,7 @@
     const editorThemeClasses = ['theme-dark','theme-light','theme-monokai','theme-nord','theme-solarized'];
     const editorTargets = () => [
       document.getElementById('inputEditor'),
+      document.getElementById('lineNums'),
       document.getElementById('treeContainer'),
       document.getElementById('emptyState'),
     ];
@@ -249,6 +277,14 @@
       const savedEditor = prefs.editorTheme || (savedMode === 'dark' ? 'auto-dark' : 'auto-light');
       document.getElementById('themeSelect').value = savedEditor;
       applyEditorTheme(savedEditor);
+
+      // Restore saved JSON content
+      const savedContent = localStorage.getItem('jsonforge_content');
+      if (savedContent) {
+        document.getElementById('inputEditor').value = savedContent;
+        updateLineNums(savedContent);
+        onInput();
+      }
     })();
 
     // ─────────────────────────────────────────
@@ -256,7 +292,9 @@
     // ─────────────────────────────────────────
     function onInput() {
       const raw = document.getElementById('inputEditor').value;
+      localStorage.setItem('jsonforge_content', raw);
       updateCounts(raw);
+      updateLineNums(raw);
       const trimmed = raw.trim();
       if (!trimmed) { parsedData = null; clearTree(); setStatus('waiting'); return; }
       try {
@@ -269,37 +307,51 @@
       }
     }
 
+    function updateLineNums(text) {
+      const count = text ? text.split('\n').length : 1;
+      const nums = Array.from({length: count}, (_, i) => i + 1).join('\n');
+      document.getElementById('lineNums').textContent = nums;
+    }
+
+    function syncLineScroll() {
+      const ta = document.getElementById('inputEditor');
+      document.getElementById('lineNums').scrollTop = ta.scrollTop;
+    }
+
     // ─────────────────────────────────────────
     // TREE
     // ─────────────────────────────────────────
     function buildTree(data) {
       const root = document.getElementById('treeRoot');
       root.innerHTML = '';
-      root.appendChild(makeNode(data, null, true));
+      root.appendChild(makeNode(data, null, false));
       document.getElementById('emptyState').classList.add('d-none');
       document.getElementById('treeContainer').classList.remove('d-none');
       document.getElementById('nodeCount').textContent = `${root.querySelectorAll('li').length} nodes`;
       buildLegend(data);
     }
 
-    function makeNode(value, key) {
+    function makeNode(value, key, isArrItem) {
       const li = document.createElement('li');
       li.className = 'py-px';
-      const keySpan = key !== null
+      const idxBadge = isArrItem
+        ? `<span class="badge bg-secondary bg-opacity-50 text-secondary me-1" style="font-size:10px">[${key}]</span>`
+        : '';
+      const keySpan = (!isArrItem && key !== null)
         ? `<span class="val-key">${escHtml(String(key))}</span><span class="text-secondary">: </span>`
         : '';
       if (value === null) {
-        li.innerHTML = `${keySpan}<span class="val-null">null</span> ${mkBadge('null','bg-secondary')}`;
+        li.innerHTML = idxBadge + keySpan + `<span class="val-null">null</span> ${mkBadge('null','bg-secondary')}`;
       } else if (Array.isArray(value)) {
-        li.appendChild(makeCollapsible(value, keySpan, true));
+        li.appendChild(makeCollapsible(value, idxBadge + keySpan, true));
       } else if (typeof value === 'object') {
-        li.appendChild(makeCollapsible(value, keySpan, false));
+        li.appendChild(makeCollapsible(value, idxBadge + keySpan, false));
       } else if (typeof value === 'string') {
-        li.innerHTML = `${keySpan}<span class="val-str">"${escHtml(value)}"</span> ${mkBadge('string','bg-info text-dark')}`;
+        li.innerHTML = idxBadge + keySpan + `<span class="val-str">"${escHtml(value)}"</span> ${mkBadge('string','bg-info text-dark')}`;
       } else if (typeof value === 'number') {
-        li.innerHTML = `${keySpan}<span class="val-num">${value}</span> ${mkBadge('number','bg-warning text-dark')}`;
+        li.innerHTML = idxBadge + keySpan + `<span class="val-num">${value}</span> ${mkBadge('number','bg-warning text-dark')}`;
       } else if (typeof value === 'boolean') {
-        li.innerHTML = `${keySpan}<span class="val-bool">${value}</span> ${mkBadge('bool','bg-danger')}`;
+        li.innerHTML = idxBadge + keySpan + `<span class="val-bool">${value}</span> ${mkBadge('bool','bg-danger')}`;
       }
       return li;
     }
@@ -325,7 +377,9 @@
       childrenDiv.className = 'tree-children mt-1';
       const ul = document.createElement('ul');
       ul.className = 'tree-ul';
-      keys.forEach(k => ul.appendChild(makeNode(value[k], isArr ? parseInt(k) : k)));
+      keys.forEach((k, i) => {
+        ul.appendChild(makeNode(value[k], isArr ? i : k, isArr));
+      });
       childrenDiv.appendChild(ul);
 
       const closeSpan = document.createElement('div');
@@ -402,9 +456,10 @@
       if (!raw) return;
       try {
         const p = JSON.parse(raw);
-        document.getElementById('inputEditor').value = JSON.stringify(p, null, 2);
+        const formatted = JSON.stringify(p, null, 2);
+        document.getElementById('inputEditor').value = formatted;
         parsedData = p; buildTree(p); hideError(); setStatus('valid');
-        updateCounts(document.getElementById('inputEditor').value);
+        updateCounts(formatted); updateLineNums(formatted);
       } catch (e) { showError(e.message); setStatus('invalid'); }
     }
 
@@ -416,7 +471,7 @@
         const min = JSON.stringify(p);
         document.getElementById('inputEditor').value = min;
         parsedData = p; buildTree(p); hideError(); setStatus('valid');
-        updateCounts(min);
+        updateCounts(min); updateLineNums(min);
       } catch (e) { showError(e.message); setStatus('invalid'); }
     }
 
@@ -452,7 +507,8 @@
 
     function clearAll() {
       document.getElementById('inputEditor').value = '';
-      parsedData = null; clearTree(); hideError(); setStatus('waiting'); updateCounts('');
+      localStorage.removeItem('jsonforge_content');
+      parsedData = null; clearTree(); hideError(); setStatus('waiting'); updateCounts(''); updateLineNums('');
     }
 
     function uploadFile(e) {
